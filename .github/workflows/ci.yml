@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Saltar si aún no hay código
+        id: hay_codigo
+        run: |
+          if [ -f package.json ]; then echo "ok=true" >> "$GITHUB_OUTPUT";
+          else echo "ok=false" >> "$GITHUB_OUTPUT"; echo "Todavía no hay package.json (tarea T-PLT-01). Nada que verificar."; fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.hay_codigo.outputs.ok == 'true'
+        with: { version: 9 }
+
+      - uses: actions/setup-node@v4
+        if: steps.hay_codigo.outputs.ok == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.hay_codigo.outputs.ok == 'true'
+
+      - run: pnpm lint
+        if: steps.hay_codigo.outputs.ok == 'true'
+
+      - run: pnpm typecheck
+        if: steps.hay_codigo.outputs.ok == 'true'
+
+      - run: pnpm test
+        if: steps.hay_codigo.outputs.ok == 'true'
+
+  migraciones:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+        ports: ['5432:5432']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Aplicar migraciones en orden
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -c "create schema if not exists auth;"
+          for f in supabase/migrations/*.sql; do
+            echo "--- $f"
+            psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f "$f"
+          done
